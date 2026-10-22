@@ -24,4 +24,11 @@ First release.
 - Optional mouse mode (`m` / `--mouse`); off by default so text can be selected and copied natively.
 - `install.sh` for a per-user install with a desktop entry for common terminals.
 
+### Security
+- Documents are treated as untrusted. Links only reach the OS opener for `http`, `https` and `mailto`;
+  other schemes (`file:`, `javascript:`, app-specific handlers) are blocked. Local links open in-app when
+  they are markdown, and are otherwise passed on only for images, PDF and text files, as absolute paths.
+- `e` (edit) passes the editor an absolute path, so a file name starting with `-` or `+` can't be
+  interpreted as an editor option or command.
+
 [0.1.0]: https://github.com/Farrely-F/arcanaeum/releases/tag/v0.1.0

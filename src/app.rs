@@ -387,9 +387,20 @@ impl App {
             self.jump_anchor(anchor);
             return;
         }
-        if url.contains("://") || url.starts_with("mailto:") {
-            self.xdg_open(&url);
-            return;
+        match url_scheme(&url) {
+            Some(s) if EXTERNAL_SCHEMES.contains(&s.as_str()) => {
+                self.xdg_open(&url);
+                return;
+            }
+            Some(s) => {
+                // A document must not be able to launch arbitrary URI handlers
+                // (file:, javascript:, custom app schemes, ...).
+                self.flash(format!(
+                    "blocked {s}: link (only http, https and mailto are opened)"
+                ));
+                return;
+            }
+            None => {}
         }
         let (file, anchor) = match url.split_once('#') {
             Some((f, a)) => (f, Some(a.to_string())),
@@ -408,10 +419,18 @@ impl App {
             .is_some_and(|e| matches!(e.to_lowercase().as_str(), "md" | "markdown" | "mdown" | "mkd"));
         if is_md && target.is_file() {
             self.navigate(&target, anchor.as_deref());
-        } else if target.exists() {
-            self.xdg_open(&target.to_string_lossy());
-        } else {
+        } else if !target.exists() {
             self.flash(format!("not found: {file}"));
+        } else if is_inert_file(&target) {
+            // Absolute path, so the opener can never read it as an option.
+            match target.canonicalize() {
+                Ok(abs) => self.xdg_open(&abs.to_string_lossy()),
+                Err(e) => self.flash(format!("cannot open {file}: {e}")),
+            }
+        } else {
+            self.flash(format!(
+                "blocked: won't open {file} (only markdown, images, PDF and text)"
+            ));
         }
     }
 
@@ -807,10 +826,69 @@ impl App {
     }
 }
 
+/// Link schemes that may be handed to the OS opener.
+const EXTERNAL_SCHEMES: &[&str] = &["http", "https", "mailto"];
+
+/// File types that are safe to hand to the OS opener from a document link.
+const INERT_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "svg", "pdf", "txt"];
+
+/// The lowercase URI scheme of `url`, if it has one (`https:`, `javascript:`, ...).
+pub fn url_scheme(url: &str) -> Option<String> {
+    let (scheme, _) = url.split_once(':')?;
+    let mut chars = scheme.chars();
+    let valid = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    valid.then(|| scheme.to_ascii_lowercase())
+}
+
+fn is_inert_file(p: &Path) -> bool {
+    p.is_file()
+        && p.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| INERT_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+}
+
 /// First visible TOC row so that `sel` stays roughly centred.
 pub fn toc_offset(sel: usize, height: usize, total: usize) -> usize {
     if total <= height {
         return 0;
     }
     sel.saturating_sub(height / 2).min(total - height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schemes_are_detected() {
+        assert_eq!(url_scheme("https://x.dev").as_deref(), Some("https"));
+        assert_eq!(url_scheme("HTTP://x.dev").as_deref(), Some("http"));
+        assert_eq!(url_scheme("mailto:a@b.c").as_deref(), Some("mailto"));
+        assert_eq!(url_scheme("javascript:alert(1)").as_deref(), Some("javascript"));
+        assert_eq!(url_scheme("file:///etc/passwd").as_deref(), Some("file"));
+        assert_eq!(url_scheme("steam://run/1").as_deref(), Some("steam"));
+    }
+
+    #[test]
+    fn relative_paths_have_no_scheme() {
+        for u in [
+            "docs/a.md",
+            "./a:b.md",
+            "../README.md#top",
+            "-rf",
+            "+cmd.md",
+            "#anchor",
+            "a/b:c",
+        ] {
+            assert_eq!(url_scheme(u), None, "{u}");
+        }
+    }
+
+    #[test]
+    fn only_web_and_mail_are_external() {
+        assert!(EXTERNAL_SCHEMES.contains(&"https"));
+        assert!(!EXTERNAL_SCHEMES.contains(&"file"));
+        assert!(!EXTERNAL_SCHEMES.contains(&"javascript"));
+    }
 }

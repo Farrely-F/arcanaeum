@@ -244,11 +244,14 @@ fn edit_externally(terminal: &mut DefaultTerminal, path: &Path, mouse_on: bool) 
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
         .unwrap_or_else(|_| "nano".into());
+    // Absolute path: a file named `+cmd` or `-x` must never be read as an
+    // editor option or command.
+    let path = path.canonicalize().unwrap_or_else(|_| Path::new(".").join(path));
     let _ = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
     let mut parts = editor.split_whitespace();
     if let Some(bin) = parts.next() {
-        let _ = Command::new(bin).args(parts).arg(path).status();
+        let _ = Command::new(bin).args(parts).arg(&path).status();
     }
     *terminal = ratatui::init();
     if mouse_on {
