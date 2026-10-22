@@ -421,16 +421,16 @@ impl App {
             self.navigate(&target, anchor.as_deref());
         } else if !target.exists() {
             self.flash(format!("not found: {file}"));
-        } else if is_inert_file(&target) {
-            // Absolute path, so the opener can never read it as an option.
+        } else {
+            // Resolve symlinks *before* checking the type: the file that gets
+            // opened must be the one that was vetted, not a disguised link.
             match target.canonicalize() {
-                Ok(abs) => self.xdg_open(&abs.to_string_lossy()),
+                Ok(abs) if is_inert_file(&abs) => self.xdg_open(&abs.to_string_lossy()),
+                Ok(_) => self.flash(format!(
+                    "blocked: won't open {file} (only markdown, images, PDF and text)"
+                )),
                 Err(e) => self.flash(format!("cannot open {file}: {e}")),
             }
-        } else {
-            self.flash(format!(
-                "blocked: won't open {file} (only markdown, images, PDF and text)"
-            ));
         }
     }
 
@@ -890,5 +890,24 @@ mod tests {
         assert!(EXTERNAL_SCHEMES.contains(&"https"));
         assert!(!EXTERNAL_SCHEMES.contains(&"file"));
         assert!(!EXTERNAL_SCHEMES.contains(&"javascript"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_cannot_disguise_a_script_as_an_image() {
+        let dir = std::env::temp_dir().join(format!("arca-symlink-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("run.sh");
+        std::fs::write(&script, "#!/bin/sh\n").unwrap();
+        let link = dir.join("pic.png");
+        std::os::unix::fs::symlink(&script, &link).unwrap();
+        let real = dir.join("real.png");
+        std::fs::write(&real, b"png").unwrap();
+
+        // The link's own name looks harmless; what it resolves to is what matters.
+        assert!(is_inert_file(&link), "the link name alone would have passed");
+        assert!(!is_inert_file(&link.canonicalize().unwrap()));
+        assert!(is_inert_file(&real.canonicalize().unwrap()));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
